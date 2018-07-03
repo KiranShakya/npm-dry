@@ -1,11 +1,11 @@
 import * as deepDiff from 'deep-diff';
 import * as merge from 'deepmerge';
 import * as fs from 'fs';
-
-import {DependencyResolver} from './dependency-resolver';
-import {DryPackageContent} from './dry-package-content';
-import {JsonUtils} from './json-utils';
-import {NpmPackage} from './npm-package';
+import * as requireCwd from 'import-cwd';
+import { DependencyResolver } from './dependency-resolver';
+import { DryPackageContent } from './dry-package-content';
+import { JsonUtils } from './json-utils';
+import { NpmPackage } from './npm-package';
 
 // TODO: consider adding a type to 'any'
 // tslint:disable-next-line:no-any
@@ -18,11 +18,14 @@ export type WeakDryPackageContent = DryPackageContent & any;
 export class DryPackage {
     private static readonly PACKAGE_DRY_JSON = 'package-dry.json';
 
-    private constructor(private readonly dependencyResolver: DependencyResolver,
-                        private readonly location: string,
-                        // tslint:disable-next-line:variable-name
-                        private _content: WeakDryPackageContent) {
-    }
+    private static readonly MANAGED_DEPENDENCY = 'MANAGED';
+
+    private constructor(
+        private readonly dependencyResolver: DependencyResolver,
+        private readonly location: string,
+        // tslint:disable-next-line:variable-name
+        private _content: WeakDryPackageContent,
+    ) {}
 
     public static readFromDisk(dependencyResolver: DependencyResolver): DryPackage {
         const location = './' + DryPackage.PACKAGE_DRY_JSON;
@@ -91,6 +94,7 @@ export class DryPackage {
                 while (collectedPackages.length > 0) {
                     mergedPackage.merge(collectedPackages.pop());
                 }
+                mergedPackage.resolveManagedDependencies();
                 return new NpmPackage(mergedPackage);
             }
         });
@@ -187,5 +191,41 @@ export class DryPackage {
 
     public get content(): WeakDryPackageContent {
         return JSON.parse(JSON.stringify(this._content));
+    }
+
+    /**
+     * This method will resolve managed version of dependencies
+     */
+    private resolveManagedDependencies(): void {
+        let dependencies = this._content.dependencies;
+        const dependencyMgmt = this._content.dependencyManagement;
+        this.resolveManaged(dependencies, dependencyMgmt);
+
+        dependencies = this._content.devDependencies;
+        this.resolveManaged(dependencies, dependencyMgmt);
+    }
+
+    /**
+     * This method will replace any value equals to "managed" provided
+     * in dependencies parameter by the value of the same key provided
+     * in dependenciesManagement parameter
+     * @param {any} dependencies object containing a list of key/value
+     * @param {any} dependencyManagement object containing a list of key/value
+     */
+    private resolveManaged(dependencies: { [s: string]: string }, dependencyManagement: { [s: string]: string }): void {
+        if (!dependencies || !dependencyManagement) {
+            return;
+        }
+
+        Object.getOwnPropertyNames(dependencies)
+            .filter((key) => DryPackage.MANAGED_DEPENDENCY === dependencies[key].toUpperCase())
+            .forEach((key) => {
+                const managedVersion = dependencyManagement[key];
+                if (managedVersion) {
+                    dependencies[key] = managedVersion;
+                } else {
+                    throw new Error(`Package ${key} must inherit a version but none are provided!`);
+                }
+            });
     }
 }
